@@ -14,10 +14,11 @@ app.use(express.json({
   }
 }));
 app.use(express.urlencoded({ limit: '200mb', extended: true }));
+app.use('/public', express.static('public'));
 
 // Basic health check route for the root URL
 app.get('/', (req, res) => {
-  res.send('ReLeaf Pads Backend is successfully running with PostgreSQL!');
+  res.send('Nappee Diapers Backend is successfully running with PostgreSQL!');
 });
 
 const whatsappService = require('./services/whatsappService');
@@ -47,7 +48,7 @@ app.get('/api/webhook', (req, res) => {
 
 // Helper for generating payment links inside webhook
 async function processOrderPayment(orderId, addressId, addressText, from) {
-  const orderRes = await pool.query('SELECT * FROM "Order" WHERE id = $1', [orderId]);
+  const orderRes = await pool.query('SELECT * FROM [Order] WHERE id = $1', [orderId]);
   if (orderRes.rows.length === 0) {
     await whatsappService.sendTextMessage(from, "Sorry, we couldn't find your pending order. Please add items to your cart again.");
     await pool.query('DELETE FROM WhatsAppSession WHERE phone = $1', [from]);
@@ -72,7 +73,7 @@ async function processOrderPayment(orderId, addressId, addressText, from) {
     amount: amountInPaise,
     currency: "INR",
     accept_partial: false,
-    description: "ReLeaf Pads Order",
+    description: "Nappee Diapers Order",
     reference_id: orderId,
     customer: { contact: from },
     notify: { sms: false, email: false },
@@ -81,7 +82,7 @@ async function processOrderPayment(orderId, addressId, addressText, from) {
   });
 
   await pool.query(`
-    UPDATE "Order" 
+    UPDATE [Order] 
     SET status = 'PENDING_PAYMENT', razorpayOrderId = $1, addressId = $2 
     WHERE id = $3
   `, [paymentLink.id, addressId, orderId]);
@@ -204,14 +205,12 @@ app.post('/api/webhook', async (req, res) => {
 
           // 1. Ensure Customer Exists
           await pool.query(`
-            INSERT INTO Customer (id, name, phone) 
-            VALUES ($1, 'WhatsApp Customer', $2) 
-            ON CONFLICT (id) DO NOTHING
+            IF NOT EXISTS (SELECT 1 FROM Customer WHERE id = $1) INSERT INTO Customer (id, name, phone) VALUES ($1, \'WhatsApp Customer\', $2)
           `, [customerId, from]);
 
           // 2. Create PENDING Order with customerId
           await pool.query(`
-            INSERT INTO "Order" (id, customerId, subtotal, delivery, total, paymentStatus, status, date)
+            INSERT INTO [Order] (id, customerId, subtotal, delivery, total, paymentStatus, status, date)
             VALUES ($1, $2, $3, $4, $5, 'PENDING', 'PENDING_ADDRESS', NOW())
           `, [orderId, customerId, subtotal, 0, total]);
 
@@ -224,9 +223,7 @@ app.post('/api/webhook', async (req, res) => {
 
           // 2. Set Session State
           await pool.query(`
-            INSERT INTO WhatsAppSession (phone, state, pendingOrderId) 
-            VALUES ($1, 'AWAITING_ADDRESS_CHOICE', $2)
-            ON CONFLICT (phone) DO UPDATE SET state = 'AWAITING_ADDRESS_CHOICE', pendingOrderId = $2, updatedAt = NOW()
+            IF EXISTS (SELECT 1 FROM WhatsAppSession WHERE phone = $1) UPDATE WhatsAppSession SET state = \'AWAITING_ADDRESS_CHOICE\', pendingOrderId = $2, updatedAt = GETDATE() WHERE phone = $1 ELSE INSERT INTO WhatsAppSession (phone, state, pendingOrderId) VALUES ($1, \'AWAITING_ADDRESS_CHOICE\', $2)
           `, [from, orderId]);
 
           // 3. Reply
@@ -284,7 +281,7 @@ app.post('/api/webhook', async (req, res) => {
 
           try {
             const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${location.latitude}&lon=${location.longitude}`, {
-              headers: { 'User-Agent': 'ReLeafPads/1.0 (contact@releafpads.in)' }
+              headers: { 'User-Agent': 'NappeePads/1.0 (contact@nappeediapers.in)' }
             });
             if (res.ok) {
               const data = await res.json();
@@ -302,14 +299,12 @@ app.post('/api/webhook', async (req, res) => {
 
           if (!isMysore) {
             await pool.query('DELETE FROM WhatsAppSession WHERE phone = $1', [from]);
-            await whatsappService.sendTextMessage(from, "Sorry, we currently only deliver via WhatsApp within Mysore city.\n\nPlease visit our website to place an order outside Mysore: https://www.releafpads.in/");
+            await whatsappService.sendTextMessage(from, "Sorry, we currently only deliver via WhatsApp within Mysore city.\n\nPlease visit our website to place an order outside Mysore: https://www.nappeediapers.in/");
             return res.sendStatus(200);
           }
 
           await pool.query(`
-            INSERT INTO Address (id, customerid, name, phone, street, area, city, state, pincode, latitude, longitude) 
-            VALUES ($1, $2, 'WhatsApp Customer', $3, 'Current Location', 'GPS Pin', 'Mysuru', 'Karnataka', $4, $5, $6) 
-            ON CONFLICT (id) DO NOTHING
+            IF NOT EXISTS (SELECT 1 FROM Address WHERE id = $1) INSERT INTO Address (id, customerId, name, phone, street, area, city, state, pincode, latitude, longitude) VALUES ($1, $2, \'WhatsApp Customer\', $3, \'Current Location\', \'GPS Pin\', \'Mysuru\', \'Karnataka\', $4, $5, $6)
           `, [addressId, customerId, from, pincode || '570000', location.latitude, location.longitude]);
 
           await processOrderPayment(orderId, addressId, addressText, from);
@@ -347,7 +342,7 @@ app.post('/api/webhook', async (req, res) => {
 
           if (!pincode.startsWith('570')) {
             await pool.query('DELETE FROM WhatsAppSession WHERE phone = $1', [from]);
-            await whatsappService.sendTextMessage(from, "Sorry, we currently only deliver via WhatsApp within Mysore city.\n\nPlease visit our website to place an order outside Mysore: https://www.releafpads.in/");
+            await whatsappService.sendTextMessage(from, "Sorry, we currently only deliver via WhatsApp within Mysore city.\n\nPlease visit our website to place an order outside Mysore: https://www.nappeediapers.in/");
             return res.sendStatus(200);
           }
 
@@ -361,16 +356,14 @@ app.post('/api/webhook', async (req, res) => {
           const customerId = `c_${from}`;
           
           await pool.query(`
-            INSERT INTO Address (id, customerid, name, phone, street, area, city, state, pincode) 
-            VALUES ($1, $2, 'WhatsApp Customer', $3, $4, 'WhatsApp Address', 'Mysuru', 'Karnataka', $5) 
-            ON CONFLICT (id) DO NOTHING
+            IF NOT EXISTS (SELECT 1 FROM Address WHERE id = $1) INSERT INTO Address (id, customerId, name, phone, street, area, city, state, pincode) VALUES ($1, $2, \'WhatsApp Customer\', $3, $4, \'WhatsApp Address\', \'Mysuru\', \'Karnataka\', $5)
           `, [addressId, customerId, from, addressText, pincode]);
 
           await processOrderPayment(orderId, addressId, addressText, from);
 
         } else if (msg_body.toLowerCase().includes('track') || msg_body.toLowerCase().trim() === '2') {
           const customerId = `c_${from}`;
-          const latestOrder = await pool.query('SELECT * FROM "Order" WHERE customerid = $1 ORDER BY date DESC LIMIT 1', [customerId]);
+          const latestOrder = await pool.query('SELECT * FROM [Order] WHERE customerid = $1 ORDER BY date DESC LIMIT 1', [customerId]);
           
           if (latestOrder.rows.length === 0) {
              const text = "You don't have any recent orders to track.";
@@ -412,7 +405,7 @@ app.post('/api/webhook', async (req, res) => {
           }
         } else if (msg_body.toLowerCase().includes('orders') || msg_body.toLowerCase().includes('history') || msg_body.toLowerCase().trim() === '3') {
            const customerId = `c_${from}`;
-           const orders = await pool.query('SELECT * FROM "Order" WHERE customerid = $1 ORDER BY date DESC LIMIT 3', [customerId]);
+           const orders = await pool.query('SELECT * FROM [Order] WHERE customerid = $1 ORDER BY date DESC LIMIT 3', [customerId]);
            
            if (orders.rows.length === 0) {
               const text = "You haven't placed any orders yet.";
@@ -557,7 +550,7 @@ app.post('/api/orders', async (req, res) => {
     const { id: reqId, customerId, addressId, subtotal, total, status, date } = req.body;
     const orderId = reqId || `o_${Date.now()}`;
     const result = await pool.query(`
-        INSERT INTO "Order" (id, customerId, addressId, subtotal, total, paymentStatus, status, date)
+        INSERT INTO [Order] (id, customerId, addressId, subtotal, total, paymentStatus, status, date)
         VALUES ($1, $2, $3, $4, $5, 'PAID', $6, $7)
         RETURNING id
       `, [orderId, customerId, addressId, subtotal, total, status, new Date(date)]);
@@ -574,7 +567,7 @@ app.put('/api/orders/:id/status', async (req, res) => {
     const { id } = req.params;
     const { status, deliveryPartnerId } = req.body;
 
-    let query = 'UPDATE "Order" SET status = $1';
+    let query = 'UPDATE [Order] SET status = $1';
     const params = [status];
 
     if (deliveryPartnerId !== undefined) {
@@ -606,7 +599,7 @@ app.put('/api/orders/:id/status', async (req, res) => {
             } catch(e) { console.error("Error fetching DP:", e); }
           }
         } else if (status === 'DELIVERED') {
-          msg = `✅ *Order Delivered*\n\nYour order (${id}) has been successfully delivered!\n\nThank you for choosing sustainable periods with ReLeaf Pads! 🌿💚`;
+          msg = `✅ *Order Delivered*\n\nYour order (${id}) has been successfully delivered!\n\nThank you for choosing sustainable periods with Nappee Diapers! 🌿💚`;
         }
         
         if (msg) {
@@ -649,7 +642,7 @@ app.post('/api/delivery-partners', async (req, res) => {
     const id = reqId || `dp_${Date.now()}`;
     await pool.query(`
         INSERT INTO DeliveryPartner (id, name, phone, isActive, availabilityStatus, createdAt, updatedAt)
-        VALUES ($1, $2, $3, true, 'AVAILABLE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        VALUES ($1, $2, $3, 1, 'AVAILABLE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
       `, [id, name, phone]);
     res.json({ success: true, id });
   } catch (err) {
@@ -749,7 +742,7 @@ app.post('/api/coupons', async (req, res) => {
     await pool.query(`
         INSERT INTO Coupon (id, code, type, discountType, discountValue, minimumOrderValue, maximumDiscount, usageLimit, active, influencerId, influencerName)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-      `, [id, code, type || 'GENERAL', discountType || 'PERCENTAGE', discountValue || 0, minimumOrderValue || null, maximumDiscount || null, usageLimit || null, active !== undefined ? active : true, influencerId || null, influencerName || null]);
+      `, [id, code, type || 'GENERAL', discountType || 'PERCENTAGE', discountValue || 0, minimumOrderValue || null, maximumDiscount || null, usageLimit || null, active !== undefined ? (active ? 1 : 0) : 1, influencerId || null, influencerName || null]);
     res.json({ success: true, id });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -759,7 +752,7 @@ app.post('/api/coupons', async (req, res) => {
 // Get Orders (with items and events)
 app.get('/api/orders', async (req, res) => {
   try {
-    const ordersResult = await pool.query('SELECT * FROM "Order" ORDER BY date DESC');
+    const ordersResult = await pool.query('SELECT * FROM [Order] ORDER BY date DESC');
     const itemsResult = await pool.query('SELECT * FROM OrderItem');
     const eventsResult = await pool.query('SELECT * FROM TrackingEvent');
     const addressesResult = await pool.query('SELECT * FROM Address');
@@ -810,27 +803,23 @@ app.post('/api/orders/full', async (req, res) => {
     const { id: reqId, customerId, addressId, couponId, subtotal, delivery, total, paymentStatus, status, items, trackingEvents } = req.body;
     const id = reqId || `#RL${Date.now()}`;
 
-    await client.query('BEGIN');
+    
 
     // 1. Ensure Customer Exists (Upsert to prevent foreign key errors from mock data)
     await client.query(`
-      INSERT INTO Customer (id, name, phone) 
-      VALUES ($1, 'Guest Customer', '0000000000') 
-      ON CONFLICT (id) DO NOTHING
+      IF NOT EXISTS (SELECT 1 FROM Customer WHERE id = $1) INSERT INTO Customer (id, name, phone) VALUES ($1, \'Guest Customer\', \'0000000000\')
     `, [customerId]);
 
     // 2. Ensure Address Exists if provided
     if (addressId) {
       await client.query(`
-        INSERT INTO Address (id, customerid, name, phone, street, area, city, state, pincode) 
-        VALUES ($1, $2, 'Guest', '0000000000', 'Unknown Street', 'Unknown Area', 'Mysuru', 'Karnataka', '570001') 
-        ON CONFLICT (id) DO NOTHING
+        IF NOT EXISTS (SELECT 1 FROM Address WHERE id = $1) INSERT INTO Address (id, customerId, name, phone, street, area, city, state, pincode) VALUES ($1, $2, \'Guest\', \'0000000000\', \'Unknown Street\', \'Unknown Area\', \'Mysuru\', \'Karnataka\', \'570001\')
       `, [addressId, customerId]);
     }
 
     // 3. Insert Order
     await client.query(`
-        INSERT INTO "Order" (id, customerId, addressId, couponId, subtotal, delivery, total, paymentStatus, status, date)
+        INSERT INTO [Order] (id, customerId, addressId, couponId, subtotal, delivery, total, paymentStatus, status, date)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       `, [id, customerId, addressId || null, couponId || null, subtotal, delivery, total, paymentStatus, status, new Date()]);
 
@@ -854,11 +843,11 @@ app.post('/api/orders/full', async (req, res) => {
       }
     }
 
-    await client.query('COMMIT');
+    
     res.json({ success: true, id });
 
   } catch (err) {
-    await client.query('ROLLBACK');
+    
     res.status(500).json({ error: err.message });
   } finally {
     client.release();
@@ -872,7 +861,7 @@ app.post('/api/orders/full', async (req, res) => {
 app.get('/health', (req, res) => {
   res.json({
     success: true,
-    service: "ReLeaf Pads API",
+    service: "Nappee Diapers API",
     status: "healthy"
   });
 });
@@ -884,10 +873,10 @@ app.post('/api/payments/create-order', async (req, res) => {
     console.log('CREATE-ORDER Webhook hit! Received orderId:', orderId);
 
     // 1. Fetch order from DB
-    const orderResult = await client.query('SELECT * FROM "Order" WHERE id = $1', [orderId]);
+    const orderResult = await client.query('SELECT * FROM [Order] WHERE id = $1', [orderId]);
     console.log('Query Result count:', orderResult.rows.length);
     if (orderResult.rows.length === 0) {
-      console.log('All Orders inside DB:', (await client.query('SELECT id FROM "Order" ORDER BY date DESC LIMIT 5')).rows);
+      console.log('All Orders inside DB:', (await client.query('SELECT id FROM [Order] ORDER BY date DESC LIMIT 5')).rows);
       return res.status(404).json({ success: false, message: 'Order not found' });
       return res.status(404).json({ success: false, message: 'Order not found' });
     }
@@ -923,7 +912,7 @@ app.post('/api/payments/create-order', async (req, res) => {
 
     // 5. Save Razorpay Order ID to our DB
     await client.query(
-      'UPDATE "Order" SET razorpayOrderId = $1, paymentStatus = $2 WHERE id = $3',
+      'UPDATE [Order] SET razorpayOrderId = $1, paymentStatus = $2 WHERE id = $3',
       [razorpayOrder.id, 'PENDING', orderId]
     );
 
@@ -972,7 +961,7 @@ app.post('/api/payments/razorpay/webhook', async (req, res) => {
 
       // Update order to PAID and status to PROCESSING
       const updateRes = await client.query(`
-        UPDATE "Order" 
+        UPDATE [Order] 
         SET paymentStatus = 'PAID', 
             status = 'PROCESSING',
             razorpayPaymentId = $1,
@@ -989,7 +978,7 @@ app.post('/api/payments/razorpay/webhook', async (req, res) => {
           const orderId = updateRes.rows[0].id;
           const customerPhone = paymentEntity.customer?.contact || paymentEntity.notes?.contact;
           if (customerPhone) {
-            const msg = `🌿 *ReLeaf Pads - Payment Successful!* 🌿\n\nYour order (#${orderId}) is confirmed! Thank you for choosing sustainable periods! 💚`;
+            const msg = `🌿 *Nappee Diapers - Payment Successful!* 🌿\n\nYour order (#${orderId}) is confirmed! Thank you for choosing sustainable periods! 💚`;
             await whatsappService.sendTextMessage(customerPhone, msg);
           }
         } catch (waErr) {
@@ -1002,7 +991,7 @@ app.post('/api/payments/razorpay/webhook', async (req, res) => {
 
       // Update order to FAILED
       await client.query(`
-        UPDATE "Order" 
+        UPDATE [Order] 
         SET paymentStatus = 'FAILED'
         WHERE razorpayOrderId = $1 AND paymentStatus = 'PENDING'
       `, [razorpayOrderId]);
@@ -1030,7 +1019,7 @@ app.post('/api/payments/verify', async (req, res) => {
 
     if (expectedSignature === razorpaySignature) {
       await client.query(`
-        UPDATE "Order" 
+        UPDATE [Order] 
         SET paymentStatus = 'PAID', 
             razorpayPaymentId = $1,
             razorpaySignature = $2,
@@ -1042,7 +1031,7 @@ app.post('/api/payments/verify', async (req, res) => {
       try {
         const orderRes = await client.query(`
           SELECT o.total, c.name, c.phone 
-          FROM "Order" o 
+          FROM [Order] o 
           JOIN Customer c ON o.customerid = c.id 
           WHERE o.id = $1
         `, [orderId]);
@@ -1057,7 +1046,7 @@ app.post('/api/payments/verify', async (req, res) => {
 
       res.json({ success: true });
     } else {
-      await client.query(`UPDATE "Order" SET paymentStatus = 'FAILED' WHERE id = $1`, [orderId]);
+      await client.query(`UPDATE [Order] SET paymentStatus = 'FAILED' WHERE id = $1`, [orderId]);
       res.status(400).json({ success: false, message: "Invalid signature" });
     }
   } catch (err) {
@@ -1071,7 +1060,7 @@ app.post('/api/payments/verify', async (req, res) => {
 app.get('/api/payments/:orderId/status', async (req, res) => {
   try {
     const { orderId } = req.params;
-    const result = await pool.query('SELECT paymentStatus, paymentMethod FROM "Order" WHERE id = $1', [orderId]);
+    const result = await pool.query('SELECT paymentStatus, paymentMethod FROM [Order] WHERE id = $1', [orderId]);
 
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, message: "Order not found" });
@@ -1087,6 +1076,29 @@ app.get('/api/payments/:orderId/status', async (req, res) => {
   }
 });
 
+app.get('/api/delivery-partners', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM DeliveryPartner');
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/delivery-partners', async (req, res) => {
+  try {
+    const { name, phone } = req.body;
+    const id = `dp_${Date.now()}`;
+    await pool.query(
+      `INSERT INTO DeliveryPartner (id, name, phone, isActive, availabilityStatus) VALUES ($1, $2, $3, 1, 'AVAILABLE')`,
+      [id, name, phone]
+    );
+    res.status(201).json({ id, name, phone, isActive: true, availabilityStatus: 'AVAILABLE' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/owner/login', (req, res) => {
   const { username, password } = req.body;
   if (username === process.env.OWNER_USERNAME && password === process.env.OWNER_PASSWORD) {
@@ -1096,10 +1108,13 @@ app.post('/api/owner/login', (req, res) => {
   }
 });
 
+// API Routes
+require('./apiRoutes')(app, pool);
+
 // Sync database on startup
 syncDatabase().then(() => {
   const PORT = process.env.PORT || 5000;
   app.listen(PORT, '0.0.0.0', () => {
-    console.log("Backend API running on port ${PORT}");
+    console.log(`Backend API running on port ${PORT}`);
   });
 });

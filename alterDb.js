@@ -4,7 +4,7 @@ const config = {
   user: process.env.DB_USER || 'sa',
   password: process.env.DB_PASSWORD || 'Password123!',
   server: process.env.DB_SERVER || 'localhost',
-  database: process.env.DB_NAME || 'ReleafPadsDB',
+  database: process.env.DB_NAME || 'nappeediapersDB',
   options: { encrypt: true, trustServerCertificate: true }
 };
 

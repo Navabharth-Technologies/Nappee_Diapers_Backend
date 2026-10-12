@@ -1,4 +1,4 @@
--- SQL Script to initialize ReLeaf Pads Database Tables
+-- SQL Script to initialize Nappee Pads Database Tables
 
 -- 1. Products Table
 IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='Products' and xtype='U')

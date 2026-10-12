@@ -1,43 +1,92 @@
-const { Pool, types } = require('pg');
+const sql = require('mssql/msnodesqlv8');
 require('dotenv').config();
 
-// Tell pg to return numeric/decimal values as floats instead of strings
-types.setTypeParser(1700, function (val) {
-  return parseFloat(val);
-});
-
-const connString = process.env.DATABASE_URL ||
-  process.env.Internal_Database_URL ||
-  process.env.External_Database_URL ||
-  `postgresql://${process.env.DB_USER}:${process.env.DB_PASSWORD}@${process.env.DB_SERVER}:${process.env.DB_PORT || process.env.DB_Port || 5432}/${process.env.DB_NAME}`;
+const connectionString = `Driver={ODBC Driver 17 for SQL Server};Server=${process.env.DB_SERVER ? process.env.DB_SERVER.split(',')[0] : 'localhost'},1433;Database=${process.env.DB_NAME};Trusted_Connection=yes;TrustServerCertificate=yes;`;
 
 const config = {
-  connectionString: connString,
-  ssl: {
-    rejectUnauthorized: false
-  }
+  connectionString: connectionString
 };
 
-// If we detect an internal Render URL (which doesn't support SSL), remove the SSL config
-if (config.connectionString && !config.connectionString.includes('render.com') && config.connectionString.includes('dpg-')) {
-  delete config.ssl;
-} else if (process.env.DB_SERVER && !process.env.DB_SERVER.includes('render.com') && process.env.DB_SERVER.includes('dpg-')) {
-  delete config.ssl;
-}
-
-const pool = new Pool(config);
-
-pool.on('error', (err) => {
-  console.error('Unexpected error on idle client', err);
+const poolPromise = new sql.ConnectionPool(config).connect().then(pool => {
+  console.log('Connected to MSSQL');
+  return pool;
+}).catch(err => {
+  console.error('Database connection failed:', err);
   process.exit(-1);
 });
+
+// A wrapper to simulate the pg pool behavior for the existing queries
+const pool = {
+  query: async (text, params = []) => {
+    const p = await poolPromise;
+    const request = p.request();
+    let mssqlText = text;
+    
+    // Replace $1, $2 with @uniqueName
+    const prefix = `p_${Math.floor(Math.random() * 1000000)}`;
+    for (let i = 0; i < params.length; i++) {
+        const paramName = `${prefix}_${i+1}`;
+        request.input(paramName, params[i]);
+        mssqlText = mssqlText.replace(new RegExp(`\\$${i+1}\\b`, 'g'), `@${paramName}`);
+    }
+    
+    // Some basic dynamic translations
+    mssqlText = mssqlText.replace(/NOW\(\)/gi, 'GETDATE()');
+    mssqlText = mssqlText.replace(/RETURNING id/gi, 'OUTPUT INSERTED.id');
+    
+    // Handle LIMIT 1
+    if (mssqlText.includes('LIMIT 1')) {
+        mssqlText = mssqlText.replace(/SELECT \*/gi, 'SELECT TOP 1 *');
+        mssqlText = mssqlText.replace(/LIMIT 1/gi, '');
+    }
+    
+    // Handle LIMIT 5
+    if (mssqlText.includes('LIMIT 5')) {
+        mssqlText = mssqlText.replace(/SELECT \*/gi, 'SELECT TOP 5 *');
+        mssqlText = mssqlText.replace(/LIMIT 5/gi, '');
+    }
+    
+    // Handle LIMIT 3
+    if (mssqlText.includes('LIMIT 3')) {
+        mssqlText = mssqlText.replace(/SELECT \*/gi, 'SELECT TOP 3 *');
+        mssqlText = mssqlText.replace(/LIMIT 3/gi, '');
+    }
+
+    // Lowercase some keys to match what pg would return
+    try {
+        const result = await request.query(mssqlText);
+        let rows = result.recordset || [];
+        // pg returns lowercase column names, mssql retains case. We lowercase them for compatibility.
+        rows = rows.map(row => {
+            let lowerRow = {};
+            for (let key in row) {
+                lowerRow[key.toLowerCase()] = row[key];
+            }
+            return lowerRow;
+        });
+        return { rows: rows };
+    } catch(err) {
+        console.error("Query Error:", err.message, "SQL:", mssqlText);
+        throw err;
+    }
+  },
+  connect: async () => {
+    return {
+      query: pool.query,
+      release: () => {}
+    };
+  }
+};
 
 async function syncDatabase() {
   try {
     console.log('Auto-syncing database tables...');
-
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS Product (
+    const p = await poolPromise;
+    const request = p.request();
+    
+    await request.query(`
+      IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='Product' and xtype='U')
+      CREATE TABLE Product (
           id VARCHAR(50) PRIMARY KEY, 
           name VARCHAR(255) NOT NULL, 
           packSize VARCHAR(50), 
@@ -49,39 +98,41 @@ async function syncDatabase() {
           stock INT, 
           stockStatus VARCHAR(50), 
           totalSold INT, 
-          active BOOLEAN
+          active BIT,
+          imageUrl TEXT,
+          category VARCHAR(100)
       );
-      
-      -- Add columns if they don't exist
-      ALTER TABLE Product ADD COLUMN IF NOT EXISTS imageUrl TEXT;
-      ALTER TABLE Product ADD COLUMN IF NOT EXISTS stockStatus VARCHAR(50);
 
-      CREATE TABLE IF NOT EXISTS DeliveryPartner (
+      IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='DeliveryPartner' and xtype='U')
+      CREATE TABLE DeliveryPartner (
           id VARCHAR(50) PRIMARY KEY, 
           name VARCHAR(255) NOT NULL, 
           phone VARCHAR(20) NOT NULL,
-          isActive BOOLEAN DEFAULT true, 
+          isActive BIT DEFAULT 1, 
           availabilityStatus VARCHAR(50) DEFAULT 'AVAILABLE',
-          createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP, 
-          updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          createdAt DATETIME DEFAULT GETDATE(), 
+          updatedAt DATETIME DEFAULT GETDATE()
       );
 
-      CREATE TABLE IF NOT EXISTS Customer (
+      IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='Customer' and xtype='U')
+      CREATE TABLE Customer (
           id VARCHAR(50) PRIMARY KEY, 
           name VARCHAR(255) NOT NULL, 
           phone VARCHAR(20) NOT NULL, 
           pincode VARCHAR(10)
       );
 
-      CREATE TABLE IF NOT EXISTS WhatsAppMessage (
+      IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='WhatsAppMessage' and xtype='U')
+      CREATE TABLE WhatsAppMessage (
           id VARCHAR(100) PRIMARY KEY,
           phone VARCHAR(20) NOT NULL,
-          sender VARCHAR(50) NOT NULL, -- 'user', 'ai', 'admin'
+          sender VARCHAR(50) NOT NULL,
           message TEXT NOT NULL,
-          createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          createdAt DATETIME DEFAULT GETDATE()
       );
 
-      CREATE TABLE IF NOT EXISTS Address (
+      IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='Address' and xtype='U')
+      CREATE TABLE Address (
           id VARCHAR(50) PRIMARY KEY, 
           customerId VARCHAR(50) REFERENCES Customer(id),
           name VARCHAR(255) NOT NULL, 
@@ -99,7 +150,8 @@ async function syncDatabase() {
           longitude FLOAT
       );
 
-      CREATE TABLE IF NOT EXISTS Coupon (
+      IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='Coupon' and xtype='U')
+      CREATE TABLE Coupon (
           id VARCHAR(50) PRIMARY KEY, 
           code VARCHAR(50) NOT NULL, 
           type VARCHAR(50), 
@@ -109,12 +161,13 @@ async function syncDatabase() {
           maximumDiscount DECIMAL(10, 2),
           usageLimit INT, 
           usedCount INT DEFAULT 0, 
-          active BOOLEAN DEFAULT true, 
+          active BIT DEFAULT 1, 
           influencerId VARCHAR(50), 
           influencerName VARCHAR(255)
       );
 
-      CREATE TABLE IF NOT EXISTS "Order" (
+      IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='Order' and xtype='U')
+      CREATE TABLE [Order] (
           id VARCHAR(100) PRIMARY KEY, 
           customerId VARCHAR(50) REFERENCES Customer(id),
           addressId VARCHAR(50) REFERENCES Address(id),
@@ -125,19 +178,18 @@ async function syncDatabase() {
           total DECIMAL(10, 2),
           paymentStatus VARCHAR(50), 
           status VARCHAR(50), 
-          date TIMESTAMP
+          date DATETIME,
+          paymentMethod VARCHAR(50),
+          razorpayOrderId VARCHAR(100),
+          razorpayPaymentId VARCHAR(100),
+          razorpaySignature VARCHAR(255),
+          paymentVerifiedAt DATETIME
       );
-      
-      ALTER TABLE "Order" 
-      ADD COLUMN IF NOT EXISTS paymentMethod VARCHAR(50),
-      ADD COLUMN IF NOT EXISTS razorpayOrderId VARCHAR(100),
-      ADD COLUMN IF NOT EXISTS razorpayPaymentId VARCHAR(100),
-      ADD COLUMN IF NOT EXISTS razorpaySignature VARCHAR(255),
-      ADD COLUMN IF NOT EXISTS paymentVerifiedAt TIMESTAMP;
 
-      CREATE TABLE IF NOT EXISTS OrderItem (
+      IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='OrderItem' and xtype='U')
+      CREATE TABLE OrderItem (
           id VARCHAR(50) PRIMARY KEY, 
-          orderId VARCHAR(100) REFERENCES "Order"(id),
+          orderId VARCHAR(100) REFERENCES [Order](id),
           productId VARCHAR(50) REFERENCES Product(id),
           productName VARCHAR(255), 
           packSize VARCHAR(50), 
@@ -147,28 +199,38 @@ async function syncDatabase() {
           itemStatus VARCHAR(50)
       );
 
-      CREATE TABLE IF NOT EXISTS WhatsAppSession (
+      IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='WhatsAppSession' and xtype='U')
+      CREATE TABLE WhatsAppSession (
           phone VARCHAR(20) PRIMARY KEY,
           state VARCHAR(50) NOT NULL,
           pendingOrderId VARCHAR(100),
-          updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          updatedAt DATETIME DEFAULT GETDATE()
       );
 
-      CREATE TABLE IF NOT EXISTS TrackingEvent (
+      IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='TrackingEvent' and xtype='U')
+      CREATE TABLE TrackingEvent (
           id VARCHAR(50) PRIMARY KEY, 
-          orderId VARCHAR(100) REFERENCES "Order"(id),
+          orderId VARCHAR(100) REFERENCES [Order](id),
           status VARCHAR(50), 
-          timestamp TIMESTAMP, 
+          timestamp DATETIME, 
           message VARCHAR(255)
       );
+      -- Removed DeliveryPartner auto-seeding to prevent dummy data from returning
+      -- Auto-seed Coupons if empty
+      IF NOT EXISTS (SELECT 1 FROM Coupon)
+      BEGIN
+          INSERT INTO Coupon (id, code, type, discountType, discountValue, minimumOrderValue, active)
+          VALUES ('c_1', 'WELCOME10', 'GENERAL', 'PERCENTAGE', 10, 500, 1),
+                 ('c_2', 'FLAT50', 'GENERAL', 'FLAT', 50, 800, 1);
+      END
     `);
 
-    console.log('Database tables verified/created successfully!');
+    console.log('Database tables verified/created and mock data seeded successfully!');
   } catch (err) {
     console.error('Database auto-sync failed:', err);
   }
 }
 
 module.exports = {
-  pool, syncDatabase
+  pool, syncDatabase, sql
 };

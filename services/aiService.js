@@ -9,7 +9,7 @@ class AIService {
     if (msg === 'hi' || msg === 'hello' || msg === 'hey' || msg === 'menu') {
       return {
         type: 'buttons',
-        text: "Hello! 👋 Welcome to ReLeaf Pads.\n\nWe're happy to help you with comfortable, thoughtful menstrual care. 💚\n\nWhat would you like to do today?",
+        text: "Hello! 👋 Welcome to Nappee Diapers.\n\nWe're happy to help you with comfortable, thoughtful baby care. 💚\n\nWhat would you like to do today?",
         buttons: [
           { id: "shop", title: "🛍️ Shop" },
           { id: "track", title: "📦 Track Order" },
@@ -22,20 +22,20 @@ class AIService {
     if (msg === '1' || msg.includes('shop') || msg.includes('buy') || msg.includes('order')) {
       return { 
         type: 'catalog', 
-        text: "Awesome! 🛍️ Check out our eco-friendly ReLeaf Pads in our catalog below. 🌿" 
+        text: "Awesome! 🛍️ Check out our eco-friendly Nappee Diapers in our catalog below. 🌿" 
       };
     }
     
     if (msg === '2' || msg.includes('track')) {
-      return { type: 'text', text: "📦 To track your current order, please log into your ReLeaf Pads mobile app or website account and visit the 'Track Order' section. \n\nIf you need manual assistance, reply with 'Help' to speak to an agent." };
+      return { type: 'text', text: "📦 To track your current order, please log into your Nappee Diapers mobile app or website account and visit the 'Track Order' section. \n\nIf you need manual assistance, reply with 'Help' to speak to an agent." };
     }
 
     if (msg === '3' || msg.includes('orders') || msg.includes('history')) {
-      return { type: 'text', text: "📜 You can view your full order history and download invoices inside the ReLeaf Pads app under 'My Orders'." };
+      return { type: 'text', text: "📜 You can view your full order history and download invoices inside the Nappee Diapers app under 'My Orders'." };
     }
 
     if (msg === '4' || msg.includes('cart')) {
-      return { type: 'text', text: "🛒 Ready to checkout? Head over to the ReLeaf Pads app or website and click the Cart icon at the top right to complete your purchase!" };
+      return { type: 'text', text: "🛒 Ready to checkout? Head over to the Nappee Diapers app or website and click the Cart icon at the top right to complete your purchase!" };
     }
 
     if (msg === 'help' || msg.includes('human') || msg.includes('agent') || msg.includes('support')) {

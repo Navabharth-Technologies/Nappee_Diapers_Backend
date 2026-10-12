@@ -2,7 +2,7 @@ const sql = require('mssql/msnodesqlv8');
 
 const config = {
   server: 'localhost\\SQLEXPRESS',
-  database: 'releaf_pads',
+  database: 'nappee_diapers',
   driver: 'msnodesqlv8',
   options: {
     trustedConnection: true,
