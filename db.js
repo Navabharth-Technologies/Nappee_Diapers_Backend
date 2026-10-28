@@ -1,11 +1,28 @@
-const sql = require('mssql/msnodesqlv8');
 require('dotenv').config();
+let sql;
+let config;
 
-const connectionString = `Driver={ODBC Driver 17 for SQL Server};Server=${process.env.DB_SERVER ? process.env.DB_SERVER.split(',')[0] : 'localhost'},1433;Database=${process.env.DB_NAME};Trusted_Connection=yes;TrustServerCertificate=yes;`;
-
-const config = {
-  connectionString: connectionString
-};
+if (process.platform === 'win32' && (!process.env.DB_SERVER || !process.env.DB_SERVER.includes('.database.windows.net'))) {
+  // Local Windows SQL Server using native ODBC driver (msnodesqlv8)
+  sql = require('mssql/msnodesqlv8');
+  config = {
+    connectionString: `Driver={ODBC Driver 17 for SQL Server};Server=${process.env.DB_SERVER ? process.env.DB_SERVER.split(',')[0] : 'localhost'},1433;Database=${process.env.DB_NAME};Trusted_Connection=yes;TrustServerCertificate=yes;`
+  };
+} else {
+  // Azure App Service / Linux or Azure SQL - uses pure JavaScript (tedious) driver without requiring native libodbc.so
+  sql = require('mssql');
+  config = {
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    server: process.env.DB_SERVER ? process.env.DB_SERVER.split(',')[0] : 'localhost',
+    port: process.env.DB_SERVER && process.env.DB_SERVER.includes(',') ? parseInt(process.env.DB_SERVER.split(',')[1]) : (parseInt(process.env.DB_PORT) || 1433),
+    database: process.env.DB_NAME,
+    options: {
+      encrypt: true,
+      trustServerCertificate: true,
+    }
+  };
+}
 
 const poolPromise = new sql.ConnectionPool(config).connect().then(pool => {
   console.log('Connected to MSSQL');
