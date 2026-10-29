@@ -565,17 +565,32 @@ app.post('/api/orders', async (req, res) => {
 app.put('/api/orders/:id/status', async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, deliveryPartnerId } = req.body;
+    const { status, deliveryPartnerId, paymentStatus } = req.body;
 
-    let query = 'UPDATE [Order] SET status = $1';
-    const params = [status];
+    const setClauses = [];
+    const params = [];
+
+    if (status) {
+      params.push(status);
+      setClauses.push(`status = $${params.length}`);
+    }
+
+    if (paymentStatus) {
+      params.push(paymentStatus);
+      setClauses.push(`paymentStatus = $${params.length}`);
+    }
 
     if (deliveryPartnerId !== undefined) {
-      query += ', deliveryPartnerId = $2';
       params.push(deliveryPartnerId);
+      setClauses.push(`deliveryPartnerId = $${params.length}`);
     }
-    query += ` WHERE id = $${params.length + 1} RETURNING customerId, deliveryPartnerId`;
+
+    if (setClauses.length === 0) {
+      return res.status(400).json({ error: "No fields to update" });
+    }
+
     params.push(id);
+    const query = `UPDATE [Order] SET ${setClauses.join(', ')} WHERE id = $${params.length} RETURNING customerId, deliveryPartnerId`;
 
     const updateRes = await pool.query(query, params);
     
