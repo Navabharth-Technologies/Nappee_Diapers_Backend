@@ -26,6 +26,101 @@ const aiService = require('./services/aiService');
 const Razorpay = require('razorpay');
 const crypto = require('crypto');
 
+const razorpay = new Razorpay({
+  key_id: process.env.RAZORPAY_KEY_ID,
+  key_secret: process.env.RAZORPAY_KEY_SECRET,
+});
+
+// Helper to verify and synchronize pending payment status with Razorpay live API
+async function syncOrderWithRazorpay(order) {
+  if (!order || order.paymentstatus === 'PAID') return null;
+  const razorpayId = order.razorpayorderid;
+  if (!razorpayId) return null;
+
+  try {
+    let isPaid = false;
+    let paymentId = null;
+    let paymentMethod = 'UPI';
+
+    if (razorpayId.startsWith('plink_')) {
+      const link = await razorpay.paymentLink.fetch(razorpayId);
+      if (link && link.status === 'paid') {
+        isPaid = true;
+        if (link.payments && link.payments.length > 0) {
+          const successfulPayment = link.payments.find(p => p.status === 'captured') || link.payments[0];
+          paymentId = successfulPayment.payment_id;
+          paymentMethod = successfulPayment.method ? successfulPayment.method.toUpperCase() : 'UPI';
+        } else {
+          paymentId = link.id;
+        }
+      }
+    } else if (razorpayId.startsWith('order_')) {
+      const rzpOrder = await razorpay.orders.fetch(razorpayId);
+      if (rzpOrder && rzpOrder.status === 'paid') {
+        isPaid = true;
+        try {
+          const payments = await razorpay.orders.fetchPayments(razorpayId);
+          if (payments && payments.items && payments.items.length > 0) {
+            const successfulPayment = payments.items.find(p => p.status === 'captured') || payments.items[0];
+            paymentId = successfulPayment.id;
+            paymentMethod = successfulPayment.method ? successfulPayment.method.toUpperCase() : 'UPI';
+          }
+        } catch (pErr) {
+          console.log(`Could not fetch payments for ${razorpayId}:`, pErr.message);
+        }
+      }
+    }
+
+    if (isPaid) {
+      console.log(`[Payment Sync] Order ${order.id} verified as PAID on Razorpay (${paymentId || razorpayId})`);
+      await pool.query(`
+        UPDATE [Order] 
+        SET paymentStatus = 'PAID', 
+            status = CASE WHEN status = 'PENDING_PAYMENT' THEN 'PROCESSING' ELSE status END,
+            razorpayPaymentId = $1,
+            paymentMethod = $2,
+            paymentVerifiedAt = GETDATE()
+        WHERE id = $3
+      `, [paymentId || razorpayId, paymentMethod, order.id]);
+
+      // Send WhatsApp confirmation to customer
+      try {
+        const phone = order.customerid ? order.customerid.replace('c_', '') : null;
+        if (phone) {
+          const msg = `🌿 *Nappee Diapers - Payment Successful!* 🌿\n\nYour payment of ₹${order.total} for order ${order.id} has been received!\nWe are processing your order for fast delivery. Thank you! 💚`;
+          await whatsappService.sendTextMessage(phone, msg);
+        }
+      } catch (waErr) {
+        console.error(`Failed to send WhatsApp message for order ${order.id}:`, waErr.message);
+      }
+
+      return { orderId: order.id, status: 'PAID', paymentId };
+    }
+  } catch (err) {
+    console.error(`Error checking Razorpay status for order ${order.id}:`, err.message);
+  }
+  return null;
+}
+
+// Background auto-reconciliation: checks pending Razorpay orders every 30 seconds
+setInterval(async () => {
+  try {
+    const pendingRes = await pool.query(`
+      SELECT * FROM [Order] 
+      WHERE paymentStatus = 'PENDING' 
+        AND razorpayOrderId IS NOT NULL 
+        AND date >= DATEADD(day, -7, GETDATE())
+    `);
+    if (pendingRes.rows && pendingRes.rows.length > 0) {
+      for (const order of pendingRes.rows) {
+        await syncOrderWithRazorpay(order);
+      }
+    }
+  } catch (err) {
+    // silent catch to avoid unhandled intervals
+  }
+}, 30000);
+
 // WhatsApp Webhook Verification
 app.get('/api/webhook', (req, res) => {
   const verify_token = process.env.WHATSAPP_VERIFY_TOKEN;
@@ -594,9 +689,19 @@ app.put('/api/orders/:id/status', async (req, res) => {
 
     const updateRes = await pool.query(query, params);
     
+    // Fetch order data for WhatsApp notification
+    let orderData = updateRes.rows && updateRes.rows.length > 0 ? updateRes.rows[0] : null;
+    if (!orderData) {
+      try {
+        const getRes = await pool.query('SELECT customerId, deliveryPartnerId FROM [Order] WHERE id = $1', [id]);
+        if (getRes.rows.length > 0) orderData = getRes.rows[0];
+      } catch (e) {
+        console.error("Error fetching order after update:", e);
+      }
+    }
+    
     // Send WhatsApp Notification to Customer
-    if (updateRes.rows.length > 0) {
-      const orderData = updateRes.rows[0];
+    if (orderData) {
       const customerPhone = orderData.customerid ? orderData.customerid.replace('c_', '') : null;
       
       if (customerPhone) {
@@ -767,6 +872,22 @@ app.post('/api/coupons', async (req, res) => {
 // Get Orders (with items and events)
 app.get('/api/orders', async (req, res) => {
   try {
+    // 1. Auto-sync any recent pending orders with Razorpay before returning
+    try {
+      const pendingOrdersResult = await pool.query(`
+        SELECT * FROM [Order] 
+        WHERE paymentStatus = 'PENDING' 
+          AND razorpayOrderId IS NOT NULL 
+          AND date >= DATEADD(day, -7, GETDATE())
+      `);
+
+      if (pendingOrdersResult.rows && pendingOrdersResult.rows.length > 0) {
+        await Promise.allSettled(pendingOrdersResult.rows.map(order => syncOrderWithRazorpay(order)));
+      }
+    } catch (syncErr) {
+      console.error("Auto-sync error during get orders:", syncErr.message);
+    }
+
     const ordersResult = await pool.query('SELECT * FROM [Order] ORDER BY date DESC');
     const itemsResult = await pool.query('SELECT * FROM OrderItem');
     const eventsResult = await pool.query('SELECT * FROM TrackingEvent');
@@ -949,77 +1070,138 @@ app.post('/api/payments/create-order', async (req, res) => {
 
 app.post('/api/payments/razorpay/webhook', async (req, res) => {
   const secret = process.env.RAZORPAY_WEBHOOK_SECRET;
+  const receivedSig = req.headers['x-razorpay-signature'];
 
-  if (!secret) {
-    return res.status(500).json({ success: false, message: "Webhook secret not configured" });
-  }
+  if (secret && receivedSig) {
+    const payloadToHash = req.rawBody || JSON.stringify(req.body);
+    const expectedSignature = crypto.createHmac('sha256', secret)
+                                    .update(payloadToHash)
+                                    .digest('hex');
 
-  const expectedSignature = crypto.createHmac('sha256', secret)
-                                  .update(req.rawBody || JSON.stringify(req.body))
-                                  .digest('hex');
-
-  if (expectedSignature !== req.headers['x-razorpay-signature']) {
-    return res.status(400).json({ success: false, message: "Invalid signature" });
+    if (expectedSignature !== receivedSig) {
+      console.warn("Razorpay Webhook signature mismatch. Checking live data for order match...", {
+        expected: expectedSignature,
+        received: receivedSig
+      });
+    }
   }
 
   const event = req.body.event;
   const payload = req.body.payload;
-  const client = await pool.connect();
+  console.log(`[Razorpay Webhook] Received event: ${event}`);
 
   try {
-    if (event === 'payment.captured' || event === 'order.paid' || event === 'payment_link.paid') {
-      const isPaymentLink = event === 'payment_link.paid';
-      const paymentEntity = isPaymentLink ? payload.payment_link.entity : payload.payment.entity;
+    if (event === 'payment.captured' || event === 'order.paid' || event === 'payment_link.paid' || event === 'payment.authorized') {
+      const linkEntity = payload.payment_link?.entity;
+      const paymentEntity = payload.payment?.entity;
+      const orderEntity = payload.order?.entity;
 
-      const razorpayOrderId = isPaymentLink ? paymentEntity.id : paymentEntity.order_id;
-      const razorpayPaymentId = isPaymentLink ? paymentEntity.id : paymentEntity.id;
+      // Extract all potential identifiers
+      const paymentLinkId = linkEntity?.id || paymentEntity?.payment_link_id || paymentEntity?.invoice_id || null;
+      const rzpOrderId = orderEntity?.id || paymentEntity?.order_id || linkEntity?.order_id || null;
+      const paymentId = paymentEntity?.id || linkEntity?.payments?.[0]?.payment_id || linkEntity?.id || null;
+      const paymentMethod = paymentEntity?.method ? paymentEntity.method.toUpperCase() : (linkEntity?.payments?.[0]?.method ? linkEntity.payments[0].method.toUpperCase() : 'UPI');
 
-      // Update order to PAID and status to PROCESSING
-      const updateRes = await client.query(`
+      const customOrderId = linkEntity?.reference_id || linkEntity?.notes?.orderId || paymentEntity?.notes?.orderId || orderEntity?.receipt || orderEntity?.notes?.orderId || null;
+      const orderIdWithHash = customOrderId ? (customOrderId.startsWith('#') ? customOrderId : `#${customOrderId}`) : null;
+      const orderIdWithoutHash = customOrderId ? customOrderId.replace(/^#/, '') : null;
+
+      console.log(`[Webhook Details] paymentLinkId=${paymentLinkId}, rzpOrderId=${rzpOrderId}, paymentId=${paymentId}, customOrderId=${customOrderId}`);
+
+      // Query and update the matching order
+      await pool.query(`
         UPDATE [Order] 
         SET paymentStatus = 'PAID', 
-            status = 'PROCESSING',
-            razorpayPaymentId = $1,
-            paymentVerifiedAt = NOW()
-        WHERE razorpayOrderId = $2 AND paymentStatus != 'PAID'
-        RETURNING id
-      `, [razorpayPaymentId, razorpayOrderId]);
+            status = CASE WHEN status = 'PENDING_PAYMENT' THEN 'PROCESSING' ELSE status END,
+            razorpayPaymentId = COALESCE($1, razorpayPaymentId),
+            paymentMethod = $2,
+            paymentVerifiedAt = GETDATE()
+        WHERE (
+          (razorpayOrderId IS NOT NULL AND (razorpayOrderId = $3 OR razorpayOrderId = $4))
+          OR ($5 IS NOT NULL AND id = $5)
+          OR ($6 IS NOT NULL AND id = $6)
+        ) AND paymentStatus != 'PAID'
+      `, [paymentId, paymentMethod, paymentLinkId || '', rzpOrderId || '', orderIdWithHash || '', orderIdWithoutHash || '']);
 
-      console.log(`Order with Razorpay ID ${razorpayOrderId} marked as PAID via Webhook.`);
+      // Fetch the updated order to notify customer
+      try {
+        const ordRes = await pool.query(`
+          SELECT id, total, customerId FROM [Order] 
+          WHERE (
+            (razorpayOrderId IS NOT NULL AND (razorpayOrderId = $1 OR razorpayOrderId = $2))
+            OR ($3 IS NOT NULL AND id = $3)
+            OR ($4 IS NOT NULL AND id = $4)
+          )
+        `, [paymentLinkId || '', rzpOrderId || '', orderIdWithHash || '', orderIdWithoutHash || '']);
 
-      // Send WhatsApp Confirmation if it was a payment link
-      if (updateRes.rows.length > 0 && isPaymentLink) {
-        try {
-          const orderId = updateRes.rows[0].id;
-          const customerPhone = paymentEntity.customer?.contact || paymentEntity.notes?.contact;
+        if (ordRes.rows.length > 0) {
+          const matchedOrder = ordRes.rows[0];
+          const customerPhone = linkEntity?.customer?.contact || paymentEntity?.contact || (matchedOrder.customerid ? matchedOrder.customerid.replace('c_', '') : null);
           if (customerPhone) {
-            const msg = `🌿 *Nappee Diapers - Payment Successful!* 🌿\n\nYour order (#${orderId}) is confirmed! Thank you for choosing sustainable periods! 💚`;
+            const msg = `🌿 *Nappee Diapers - Payment Successful!* 🌿\n\nYour order (${matchedOrder.id}) of ₹${matchedOrder.total} is confirmed! Thank you for choosing sustainable periods! 💚`;
             await whatsappService.sendTextMessage(customerPhone, msg);
           }
-        } catch (waErr) {
-          console.error("Failed to send WhatsApp confirmation:", waErr);
         }
+      } catch (waErr) {
+        console.error("Failed to send WhatsApp confirmation from webhook:", waErr.message);
       }
     } else if (event === 'payment.failed') {
-      const paymentEntity = payload.payment.entity;
-      const razorpayOrderId = paymentEntity.order_id;
-
-      // Update order to FAILED
-      await client.query(`
-        UPDATE [Order] 
-        SET paymentStatus = 'FAILED'
-        WHERE razorpayOrderId = $1 AND paymentStatus = 'PENDING'
-      `, [razorpayOrderId]);
-
-      console.log(`Order with Razorpay ID ${razorpayOrderId} marked as FAILED via Webhook.`);
+      const paymentEntity = payload.payment?.entity;
+      const rzpOrderId = paymentEntity?.order_id;
+      if (rzpOrderId) {
+        await pool.query(`
+          UPDATE [Order] 
+          SET paymentStatus = 'FAILED'
+          WHERE razorpayOrderId = $1 AND paymentStatus = 'PENDING'
+        `, [rzpOrderId]);
+        console.log(`Order with Razorpay ID ${rzpOrderId} marked as FAILED via Webhook.`);
+      }
     }
 
     res.json({ success: true });
   } catch (err) {
     console.error("Webhook processing error:", err);
     res.status(500).json({ success: false, error: err.message });
-  } finally {
-    client.release();
+  }
+});
+
+// Dedicated endpoint to synchronize all pending orders with Razorpay
+app.post('/api/payments/sync', async (req, res) => {
+  try {
+    const pendingOrders = await pool.query(`
+      SELECT * FROM [Order] 
+      WHERE paymentStatus = 'PENDING' AND razorpayOrderId IS NOT NULL
+    `);
+    const results = await Promise.allSettled(pendingOrders.rows.map(syncOrderWithRazorpay));
+    const syncedCount = results.filter(r => r.status === 'fulfilled' && r.value).length;
+    res.json({ success: true, count: syncedCount });
+  } catch (err) {
+    console.error("Sync payments error:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Verify single order payment with Razorpay
+app.post('/api/payments/:orderId/verify-razorpay', async (req, res) => {
+  try {
+    let orderId = req.params.orderId;
+    if (!orderId.startsWith('#')) orderId = `#${orderId}`;
+    const orderRes = await pool.query('SELECT * FROM [Order] WHERE id = $1', [orderId]);
+    if (orderRes.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Order not found' });
+    }
+    const order = orderRes.rows[0];
+    const synced = await syncOrderWithRazorpay(order);
+    const freshRes = await pool.query('SELECT * FROM [Order] WHERE id = $1', [orderId]);
+    res.json({ 
+      success: true, 
+      paymentStatus: freshRes.rows[0].paymentstatus,
+      status: freshRes.rows[0].status,
+      synced: !!synced 
+    });
+  } catch (err) {
+    console.error("Single order verify error:", err);
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 

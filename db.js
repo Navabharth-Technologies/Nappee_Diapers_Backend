@@ -49,7 +49,36 @@ const pool = {
     
     // Some basic dynamic translations
     mssqlText = mssqlText.replace(/NOW\(\)/gi, 'GETDATE()');
-    mssqlText = mssqlText.replace(/RETURNING id/gi, 'OUTPUT INSERTED.id');
+    
+    // Support Postgres-style RETURNING clause by translating to MSSQL OUTPUT INSERTED
+    const returningRegex = /\bRETURNING\s+([\w\s,.*]+)$/i;
+    const returningMatch = mssqlText.match(returningRegex);
+    if (returningMatch) {
+      const rawCols = returningMatch[1].trim();
+      const cols = rawCols.split(',').map(c => {
+        const trimmed = c.trim();
+        return trimmed.toLowerCase().startsWith('inserted.') ? trimmed : `INSERTED.${trimmed}`;
+      }).join(', ');
+
+      // Strip RETURNING clause from the end
+      mssqlText = mssqlText.replace(returningRegex, '').trim();
+
+      if (/^\s*UPDATE\b/i.test(mssqlText)) {
+        if (/\bWHERE\b/i.test(mssqlText)) {
+          // Place OUTPUT before WHERE
+          mssqlText = mssqlText.replace(/\bWHERE\b/i, `OUTPUT ${cols} WHERE`);
+        } else {
+          mssqlText = `${mssqlText} OUTPUT ${cols}`;
+        }
+      } else if (/^\s*INSERT\s+INTO\b/i.test(mssqlText)) {
+        if (/\bVALUES\b/i.test(mssqlText)) {
+          // Place OUTPUT before VALUES
+          mssqlText = mssqlText.replace(/\bVALUES\b/i, `OUTPUT ${cols} VALUES`);
+        } else {
+          mssqlText = `${mssqlText} OUTPUT ${cols}`;
+        }
+      }
+    }
     
     // Handle LIMIT 1
     if (mssqlText.includes('LIMIT 1')) {
