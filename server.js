@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const path = require('path');
 require('dotenv').config();
 const { pool, syncDatabase } = require('./db');
 
@@ -14,11 +15,20 @@ app.use(express.json({
   }
 }));
 app.use(express.urlencoded({ limit: '200mb', extended: true }));
-app.use('/public', express.static('public'));
+app.use('/public', express.static(path.join(__dirname, 'public')));
 
 // Basic health check route for the root URL
 app.get('/', (req, res) => {
   res.send('Nappee Diapers Backend is successfully running with PostgreSQL!');
+});
+
+// Privacy Policy & Terms for Google Play Store & User Compliance
+app.get('/privacy-policy', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'privacy-policy.html'));
+});
+
+app.get(['/terms', '/terms-and-conditions'], (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'terms.html'));
 });
 
 const whatsappService = require('./services/whatsappService');
