@@ -43,18 +43,32 @@ module.exports = function(app, pool) {
           }
         }
         
-        // Multi-image gallery for Pant-Style Small (S) size diapers
-        const nameLower = (p.name || '').toLowerCase();
-        const isPantS = p.id === 'pant-s-62' || p.id === 'pant-s' || ((nameLower.includes('(s)') || nameLower.includes('small')) && (p.category === 'Pant-Style' || nameLower.includes('pant')));
-        if ((!images || images.length <= 1) && isPantS) {
-          images = [
-            p.imageurl || '/public/images/(P)S-62.jpg',
-            '/public/images/(P)S-62-1.jpg',
-            '/public/images/(P)S-62-2.jpg',
-            '/public/images/(P)S-62-3.jpg'
-          ];
-        } else if (!images || images.length === 0) {
-          images = p.imageurl ? [p.imageurl] : [];
+        // Multi-image galleries for all Pant-Style diaper sizes (S, M, L, XL, XXL, XXXL)
+        if (!images || images.length <= 1) {
+          const idLower = (p.id || '').toLowerCase();
+          const nameLower = (p.name || '').toLowerCase();
+          const isPant = p.category === 'Pant-Style' || nameLower.includes('pant') || idLower.startsWith('pant');
+          const primaryImg = p.imageurl;
+
+          if (isPant) {
+            if (idLower.includes('xxxl') || nameLower.includes('xxxl') || nameLower.includes('triple')) {
+              images = [primaryImg || '/public/images/(P)XXXL-40.jpg', '/public/images/(P)XXXL-40-1.jpg', '/public/images/(P)XXXL-40-2.jpg', '/public/images/(P)XXXL-40-3.jpg'];
+            } else if (idLower.includes('xxl') || nameLower.includes('xxl') || nameLower.includes('double extra')) {
+              images = [primaryImg || '/public/images/(P)XXL-44.jpg', '/public/images/(P)XXL-44-1.jpg', '/public/images/(P)XXL-44-2.jpg', '/public/images/(P)XXL-44-3.jpg'];
+            } else if (idLower.includes('xl') || nameLower.includes('(xl)') || nameLower.includes('extra large')) {
+              images = [primaryImg || '/public/images/(P)XL-48.jpg', '/public/images/(P)XL-48-1.jpg', '/public/images/(P)XL-48-2.jpg', '/public/images/(P)XL-48-3.jpg'];
+            } else if (idLower.includes('-l-') || idLower === 'pant-l' || idLower.includes('l-52') || nameLower.includes('(l)') || nameLower.includes('(large)') || nameLower.includes('large')) {
+              images = [primaryImg || '/public/images/(P)L-52.jpg', '/public/images/(P)L-52-1.jpg', '/public/images/(P)L-52-2.jpg', '/public/images/(P)L-52-3.jpg'];
+            } else if (idLower.includes('-m-') || idLower === 'pant-m' || idLower.includes('m-56') || nameLower.includes('(m)') || nameLower.includes('(medium)') || nameLower.includes('medium')) {
+              images = [primaryImg || '/public/images/(P)M-56.jpg', '/public/images/(P)M-56-1.jpg', '/public/images/(P)M-56-2.jpg', '/public/images/(P)M-56-3.jpg'];
+            } else if (idLower.includes('-s-') || idLower === 'pant-s' || idLower.includes('s-62') || nameLower.includes('(s)') || nameLower.includes('(small)') || nameLower.includes('small')) {
+              images = [primaryImg || '/public/images/(P)S-62.jpg', '/public/images/(P)S-62-1.jpg', '/public/images/(P)S-62-2.jpg', '/public/images/(P)S-62-3.jpg'];
+            } else {
+              images = p.imageurl ? [p.imageurl] : [];
+            }
+          } else {
+            images = p.imageurl ? [p.imageurl] : [];
+          }
         }
 
         return {
