@@ -640,9 +640,29 @@ app.get('/api/products', async (req, res) => {
 app.put('/api/products/:id/image', async (req, res) => {
   try {
     const { id } = req.params;
-    const { imageUrl } = req.body;
+    let { imageUrl } = req.body;
+    if (imageUrl && typeof imageUrl === 'string' && imageUrl.startsWith('data:image/')) {
+      try {
+        const matches = imageUrl.match(/^data:image\/([A-Za-z-+\/]+);base64,(.+)$/);
+        if (matches && matches.length === 3) {
+          let ext = matches[1].toLowerCase();
+          if (ext === 'jpeg') ext = 'jpg';
+          const buffer = Buffer.from(matches[2], 'base64');
+          const cleanId = (id || `prod_${Date.now()}`).replace(/[^a-zA-Z0-9_-]/g, '_');
+          const fileName = `${cleanId}.${ext}`;
+          const targetDir = path.join(__dirname, 'public', 'products');
+          if (!require('fs').existsSync(targetDir)) {
+            require('fs').mkdirSync(targetDir, { recursive: true });
+          }
+          require('fs').writeFileSync(path.join(targetDir, fileName), buffer);
+          imageUrl = `/public/products/${fileName}`;
+        }
+      } catch (imgErr) {
+        console.error('Error saving base64 product image to file:', imgErr);
+      }
+    }
     await pool.query('UPDATE Product SET imageUrl = $1 WHERE id = $2', [imageUrl, id]);
-    res.json({ success: true });
+    res.json({ success: true, imageUrl });
   } catch (err) {
     console.error("Error updating image:", err);
     res.status(500).json({ error: err.message });
