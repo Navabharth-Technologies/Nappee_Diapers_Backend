@@ -33,17 +33,42 @@ module.exports = function(app, pool) {
     try {
       const result = await pool.query('SELECT * FROM Product');
       // Format the result properly for frontend
-      const products = result.rows.map(p => ({
-        ...p,
-        active: p.active === 1 || p.active === true,
-        stockStatus: p.stockstatus,
-        imageFallback: p.imagefallback,
-        sellingPrice: parseFloat(p.sellingprice) || 0,
-        mrp: parseFloat(p.mrp) || 0,
-        imageUrl: p.imageurl,
-        packSize: p.packsize,
-        totalSold: parseInt(p.totalsold) || 0
-      }));
+      const products = result.rows.map(p => {
+        let images = [];
+        if (p.images) {
+          try {
+            images = typeof p.images === 'string' ? JSON.parse(p.images) : p.images;
+          } catch {
+            images = String(p.images).split(',').map(s => s.trim()).filter(Boolean);
+          }
+        }
+        
+        // Multi-image gallery for Pant-Style Small (S) size diapers
+        const isPantS = p.id === 'pant-s-62' || p.id === 'pant-s' || (p.name && p.name.includes('(S)') && (p.category === 'Pant-Style' || p.name.toLowerCase().includes('pant')));
+        if ((!images || images.length <= 1) && isPantS) {
+          images = [
+            p.imageurl || '/public/images/(P)S-62.jpg',
+            '/public/images/(P)S-62-1.jpg',
+            '/public/images/(P)S-62-2.jpg',
+            '/public/images/(P)S-62-3.jpg'
+          ];
+        } else if (!images || images.length === 0) {
+          images = p.imageurl ? [p.imageurl] : [];
+        }
+
+        return {
+          ...p,
+          active: p.active === 1 || p.active === true,
+          stockStatus: p.stockstatus,
+          imageFallback: p.imagefallback,
+          sellingPrice: parseFloat(p.sellingprice) || 0,
+          mrp: parseFloat(p.mrp) || 0,
+          imageUrl: p.imageurl,
+          images: images,
+          packSize: p.packsize,
+          totalSold: parseInt(p.totalsold) || 0
+        };
+      });
       res.json(products);
     } catch (err) {
       console.error(err);
@@ -53,14 +78,15 @@ module.exports = function(app, pool) {
 
   app.post('/api/products', async (req, res) => {
     try {
-      let { id, name, packSize, mrp, sellingPrice, discount, description, imageFallback, stock, stockStatus, active, imageUrl, category } = req.body;
+      let { id, name, packSize, mrp, sellingPrice, discount, description, imageFallback, stock, stockStatus, active, imageUrl, images, category } = req.body;
       imageUrl = saveBase64Image(id, imageUrl);
+      const imagesJson = Array.isArray(images) ? JSON.stringify(images) : (images || null);
       await pool.query(
-        `INSERT INTO Product (id, name, packSize, mrp, sellingPrice, discount, description, imageFallback, stock, stockStatus, totalSold, active, imageUrl, category) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, $11, $12, $13)`,
-        [id, name, packSize || '1', mrp || 0, sellingPrice || 0, discount || 0, description || '', imageFallback || '', stock || 0, stockStatus || 'IN_STOCK', active === false ? 0 : 1, imageUrl || '', category || 'Pant-Style']
+        `INSERT INTO Product (id, name, packSize, mrp, sellingPrice, discount, description, imageFallback, stock, stockStatus, totalSold, active, imageUrl, images, category) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, $11, $12, $13, $14)`,
+        [id, name, packSize || '1', mrp || 0, sellingPrice || 0, discount || 0, description || '', imageFallback || '', stock || 0, stockStatus || 'IN_STOCK', active === false ? 0 : 1, imageUrl || '', imagesJson, category || 'Pant-Style']
       );
-      res.status(201).json({ success: true, imageUrl });
+      res.status(201).json({ success: true, imageUrl, images });
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: err.message });
@@ -83,7 +109,7 @@ module.exports = function(app, pool) {
   app.put('/api/products/:id', async (req, res) => {
     try {
       const { id } = req.params;
-      const { name, packSize, mrp, sellingPrice, discount, description, stock, stockStatus, active, imageUrl, category } = req.body;
+      const { name, packSize, mrp, sellingPrice, discount, description, stock, stockStatus, active, imageUrl, images, category } = req.body;
       const updates = [];
       const values = [];
       let idx = 1;
@@ -97,6 +123,10 @@ module.exports = function(app, pool) {
       if (stockStatus !== undefined) { updates.push(`stockStatus = $${idx++}`); values.push(stockStatus); }
       if (active !== undefined) { updates.push(`active = $${idx++}`); values.push(active ? 1 : 0); }
       if (imageUrl !== undefined) { updates.push(`imageUrl = $${idx++}`); values.push(imageUrl); }
+      if (images !== undefined) { 
+        updates.push(`images = $${idx++}`); 
+        values.push(Array.isArray(images) ? JSON.stringify(images) : images); 
+      }
       if (category !== undefined) { updates.push(`category = $${idx++}`); values.push(category); }
       if (updates.length > 0) {
         values.push(id);

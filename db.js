@@ -146,8 +146,14 @@ async function syncDatabase() {
           totalSold INT, 
           active BIT,
           imageUrl TEXT,
+          images TEXT,
           category VARCHAR(100)
       );
+
+      IF COL_LENGTH('Product', 'images') IS NULL
+      BEGIN
+          ALTER TABLE Product ADD images TEXT;
+      END
 
       IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='DeliveryPartner' and xtype='U')
       CREATE TABLE DeliveryPartner (
