@@ -80,6 +80,35 @@ module.exports = function(app, pool) {
     }
   });
 
+  app.put('/api/products/:id', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { name, packSize, mrp, sellingPrice, discount, description, stock, stockStatus, active, imageUrl, category } = req.body;
+      const updates = [];
+      const values = [];
+      let idx = 1;
+      if (name !== undefined) { updates.push(`name = $${idx++}`); values.push(name); }
+      if (packSize !== undefined) { updates.push(`packSize = $${idx++}`); values.push(packSize); }
+      if (mrp !== undefined) { updates.push(`mrp = $${idx++}`); values.push(mrp); }
+      if (sellingPrice !== undefined) { updates.push(`sellingPrice = $${idx++}`); values.push(sellingPrice); }
+      if (discount !== undefined) { updates.push(`discount = $${idx++}`); values.push(discount); }
+      if (description !== undefined) { updates.push(`description = $${idx++}`); values.push(description); }
+      if (stock !== undefined) { updates.push(`stock = $${idx++}`); values.push(stock); }
+      if (stockStatus !== undefined) { updates.push(`stockStatus = $${idx++}`); values.push(stockStatus); }
+      if (active !== undefined) { updates.push(`active = $${idx++}`); values.push(active ? 1 : 0); }
+      if (imageUrl !== undefined) { updates.push(`imageUrl = $${idx++}`); values.push(imageUrl); }
+      if (category !== undefined) { updates.push(`category = $${idx++}`); values.push(category); }
+      if (updates.length > 0) {
+        values.push(id);
+        await pool.query(`UPDATE Product SET ${updates.join(', ')} WHERE id = $${idx}`, values);
+      }
+      res.json({ success: true });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.put('/api/products/:id/stock', async (req, res) => {
     try {
       const { stock, stockStatus } = req.body;
