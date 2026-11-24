@@ -44,7 +44,8 @@ module.exports = function(app, pool) {
         }
         
         // Multi-image gallery for Pant-Style Small (S) size diapers
-        const isPantS = p.id === 'pant-s-62' || p.id === 'pant-s' || (p.name && p.name.includes('(S)') && (p.category === 'Pant-Style' || p.name.toLowerCase().includes('pant')));
+        const nameLower = (p.name || '').toLowerCase();
+        const isPantS = p.id === 'pant-s-62' || p.id === 'pant-s' || ((nameLower.includes('(s)') || nameLower.includes('small')) && (p.category === 'Pant-Style' || nameLower.includes('pant')));
         if ((!images || images.length <= 1) && isPantS) {
           images = [
             p.imageurl || '/public/images/(P)S-62.jpg',
