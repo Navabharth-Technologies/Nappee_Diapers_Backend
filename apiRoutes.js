@@ -43,14 +43,19 @@ module.exports = function(app, pool) {
           }
         }
         
-        // Multi-image galleries for all Pant-Style diaper sizes (S, M, L, XL, XXL, XXXL)
+        // Multi-image galleries for all Diapers: Pant-Style, Velcro-Style, and Sample Diapers
         if (!images || images.length <= 1) {
           const idLower = (p.id || '').toLowerCase();
           const nameLower = (p.name || '').toLowerCase();
           const isPant = p.category === 'Pant-Style' || nameLower.includes('pant') || idLower.startsWith('pant');
+          const isVelcro = p.category === 'Velcro Style' || (p.category || '').toLowerCase().includes('velcro') || idLower.includes('velcro') || nameLower.includes('velcro') || nameLower.includes('tape');
+          const isSample = idLower.includes('prod_1795500818135') || idLower.includes('prod_1795500916500') || nameLower.includes('sample') || nameLower.includes('trial') || nameLower.includes('pack of 2');
           const primaryImg = p.imageurl;
 
-          if (isPant) {
+          if (isSample) {
+            const samplePrimary = primaryImg || (isVelcro || idLower.includes('velcro') ? '/public/products/prod_1795500916500.jpg' : '/public/products/prod_1795500818135.jpg');
+            images = [samplePrimary, '/public/images/(Sample)-back.jpg'];
+          } else if (isPant) {
             if (idLower.includes('xxxl') || nameLower.includes('xxxl') || nameLower.includes('triple')) {
               images = [primaryImg || '/public/images/(P)XXXL-40.jpg', '/public/images/(P)XXXL-40-1.jpg', '/public/images/(P)XXXL-40-2.jpg', '/public/images/(P)XXXL-40-3.jpg'];
             } else if (idLower.includes('xxl') || nameLower.includes('xxl') || nameLower.includes('double extra')) {
@@ -64,10 +69,22 @@ module.exports = function(app, pool) {
             } else if (idLower.includes('-s-') || idLower === 'pant-s' || idLower.includes('s-62') || nameLower.includes('(s)') || nameLower.includes('(small)') || nameLower.includes('small')) {
               images = [primaryImg || '/public/images/(P)S-62.jpg', '/public/images/(P)S-62-1.jpg', '/public/images/(P)S-62-2.jpg', '/public/images/(P)S-62-3.jpg'];
             } else {
-              images = p.imageurl ? [p.imageurl] : [];
+              images = primaryImg ? [primaryImg] : [];
+            }
+          } else if (isVelcro) {
+            if (idLower.includes('pb') || nameLower.includes('prematur') || nameLower.includes('pb') || idLower.includes('pb-30')) {
+              images = [primaryImg || '/public/images/(V)PB-30.png', '/public/images/(V)PB-30-1.jpg', '/public/images/(V)PB-30-2.jpg', '/public/images/(V)PB-30-3.jpg'];
+            } else if (idLower.includes('nb') || nameLower.includes('newborn') || nameLower.includes('nb') || idLower.includes('nb-72') || idLower.includes('nb-36')) {
+              images = [primaryImg || '/public/images/(V)NB-72.jpg', '/public/images/(V)NB-72-1.jpg', '/public/images/(V)NB-72-2.jpg', '/public/images/(V)NB-72-3.jpg'];
+            } else if (idLower.includes('-s-') || idLower.includes('s-62') || nameLower.includes('(s)') || nameLower.includes('(small)') || nameLower.includes('small')) {
+              images = [primaryImg || '/public/images/(V)S-62.jpg', '/public/images/(V)S-62-1.jpg', '/public/images/(V)S-62-2.jpg', '/public/images/(V)S-62-3.jpg'];
+            } else if (idLower.includes('-m-') || idLower.includes('m-52') || nameLower.includes('(m)') || nameLower.includes('(medium)') || nameLower.includes('medium')) {
+              images = [primaryImg || '/public/images/(V)M-52.jpg', '/public/images/(V)M-52-1.jpg', '/public/images/(V)M-52-2.jpg', '/public/images/(V)M-52-3.jpg'];
+            } else {
+              images = primaryImg ? [primaryImg] : [];
             }
           } else {
-            images = p.imageurl ? [p.imageurl] : [];
+            images = primaryImg ? [primaryImg] : [];
           }
         }
 
